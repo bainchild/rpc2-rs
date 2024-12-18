@@ -26,7 +26,9 @@ function mt:__index(k)
 	local f=function(...)
 		if running[k] then repeat task.wait() until not running[k]; end
 		running[k]=true
-		print("RPC2:"..https:JSONEncode({k,...}))
+		local narg = {...}
+		for i,v in next, narg do narg[i]=tostring(v) end
+		print("RPC2:"..https:JSONEncode({k,unpack(narg)}))
 		local start = os.time()
 		while true do
 			local data = readdata("rpc2/"..k)
