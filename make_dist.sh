@@ -11,5 +11,4 @@ cargo build --release --target x86_64-pc-windows-gnu
 zip -j9 rpc2_release_windows.zip \
     target/x86_64-pc-windows-gnu/release/*.dll \
     target/x86_64-pc-windows-gnu/release/plugin_debug_server.exe \
-    target/x86_64-pc-windows-gnu/release/rpc2_plugin_drawing.exe \
     target/x86_64-pc-windows-gnu/release/rpc2_server.exe
