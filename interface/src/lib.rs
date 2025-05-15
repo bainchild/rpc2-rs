@@ -32,3 +32,9 @@ impl RootModule for RPC2PluginRef {
 pub fn load_root_module_from_file(file: &Path) -> Result<RPC2PluginRef, LibraryError> {
     lib_header_from_path(file).and_then(|x| x.init_root_module::<RPC2PluginRef>())
 }
+
+pub trait MessageHandler {
+    fn handle_message(self, command: RString, args: RVec<RString>) -> Option<RVec<u8>>;
+}
+
+pub type Response = RVec<u8>;

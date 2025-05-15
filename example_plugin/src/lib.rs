@@ -29,20 +29,48 @@ pub fn init() {
 
 #[sabi_extern_fn]
 pub fn get_event_mask() -> ROption<RVec<RString>> {
-    Some(vec!["get_data".into()].into()).into()
+    Some(
+        vec![
+            "get_data".into(),
+            "get_medium_data".into(),
+            "get_large_data".into(),
+        ]
+        .into(),
+    )
+    .into()
 }
+
+const MEDIUM_STRING: &'static str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const LARGE_STRING: &'static str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 #[sabi_extern_fn]
 pub fn handle_message(command: RString, args: RVec<RString>) -> ROption<RVec<u8>> {
-    assert_eq!(Into::<String>::into(command), "get_data");
     println!("example plugin args: {:?}", args);
     Some(
-        json!(vec![
-            Value::Bool(true),
-            Value::String("datadata1".to_string()),
-            Value::String("2data".to_string()),
-            Value::String("da4ta".to_string())
-        ])
+        json!(match command.to_string().as_str() {
+            "get_data" => vec![
+                Value::Bool(true),
+                Value::String("datadata1".to_string()),
+                Value::String("2data".to_string()),
+                Value::String("da4ta".to_string())
+            ],
+            "get_medium_data" => {
+                let mut v = Vec::with_capacity(50);
+                v.push(Value::Bool(true));
+                v.fill(Value::String(MEDIUM_STRING.to_string()));
+                v
+            }
+            "get_large_data" => {
+                let mut v = Vec::with_capacity(10000);
+                v.push(Value::Bool(true));
+                v.fill(Value::String(LARGE_STRING.to_string()));
+                v
+            }
+            _ => vec![
+                Value::Bool(false),
+                Value::String("No such function".to_string())
+            ],
+        })
         .to_string()
         .as_bytes()
         .into(),

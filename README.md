@@ -1,9 +1,5 @@
 # RPC2: Bidirectional RPC for Roblox.
 ---
-### NOTE: requires EditableImage API to be enabled or accessible.  
-### You could technically use it on the server, but you don't have
-### access to a server's logs and content directories usually.
----
 This workspace contains:
   - `server`: RPC2 server written in rust with plugin support.
   - `interface`: RPC2 plugin interface for writing/using plugins.
@@ -11,10 +7,17 @@ This workspace contains:
 ---
 
 The protocol works like [BloxstrapRPC](https://github.com/bloxstraplabs/bloxstrap/wiki/Integrating-Bloxstrap-functionality-into-your-game) for roblox to host communication,  
-and for host to client it uses [EditableImage](https://robloxapi.github.io/ref/class/EditableImage.html)-s loaded from the  
-content directory using `rbxasset://rpc2/<command>`, and reading the pixels as a buffer, converting it to a string.  
-Suprisingly, this doesn't cache when you call CreateEditableImageAsync with a string, allowing for fast polling.  
-Note that this does NOT allow arbitrary file access, as they have to be image files, and they have to be in a roblox content directory.
+and for host to client it uses json files loaded from the content directory using `rbxasset://rpc2/<cachebuster><command>`, reading it using `TextService:GetFamilyInfo()`, which converts it to a table.  
+The cachebuster is determined by the client and sent along with the command.
+  
+It used to use [EditableImage](https://robloxapi.github.io/ref/class/EditableImage.html)-s loaded from the content directory.  
+Note that this does NOT allow arbitrary file access, as they have to be specific-format json files (or image files), and they have to be in a roblox content directory with a known path.
+
+---
+
+`TextService:GetFamilyInfoAsync(contentId)` will return a lightly modified and verified, reprocessed version of the json file specified by the contentId.
+It has a large file length limit, which is incredibly useful as it deserializes faster than an image for the same data.
+`TextService:GetFamilyInfoAsync` was added in v517, march 2022, meaning it can be used in 2022 clients.
 
 ---
 Host -> Roblox communication enables a lot of things, a few examples being:
