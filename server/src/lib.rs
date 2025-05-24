@@ -1,35 +1,59 @@
+#[cfg(feature = "sabi")]
 use abi_stable::{reexports::SelfOps, traits::IntoReprRust};
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use chrono::{DateTime, Local};
 use json::object;
 use notify::{
-    event::{CreateKind, ModifyKind, RemoveKind},
     Config, Event, Watcher,
+    event::{CreateKind, ModifyKind, RemoveKind},
 };
 use regex::Regex;
-use rpc2_interface::RPC2PluginRef;
-use serde_json::{json, Value};
+use rpc2_interface::builtin::RPC2BuiltinPlugin;
+#[cfg(feature = "sabi")]
+use rpc2_interface::sabi::RPC2PluginRef;
+use serde_json::{Value, json};
 use std::{
-    collections::HashMap, io::Error, path::Path, pin::Pin, sync::mpsc, task::Poll, time::Duration,
+    collections::HashMap,
+    io::Error,
+    path::Path,
+    sync::mpsc,
+    time::{Duration, Instant, SystemTime},
 };
 #[derive(Default)]
 pub struct RPC2Server {
     content_dir: String,
+    #[cfg(feature = "sabi")]
     plugins: Vec<RPC2PluginRef>,
+    builtins: Vec<Box<dyn RPC2BuiltinPlugin>>,
     monitered_files: Vec<String>,
     checked_lines: HashMap<String, usize>,
-    needs_ack: Vec<String>,
+    content_files: Vec<String>,
+    // needs_ack: Vec<String>,
+    // failed_reads: Vec<(DateTime<Local>, String)>,
+    ready: Vec<String>,
     listeners: HashMap<String, Vec<mpsc::Sender<String>>>,
-}
-pub struct RPC2Stream {
-    chunk: Vec<char>,
-    pending: Vec<String>,
-    timeout: Duration,
-    mpsc: std::sync::mpsc::Receiver<String>,
 }
 
 impl RPC2Server {
+    #[cfg(feature = "sabi")]
     pub fn load_plugin(&mut self, plugin: RPC2PluginRef) {
         self.plugins.push(plugin);
+    }
+    pub fn get_content_path(&self, cacheprefix: String, command: String) -> String {
+        self.content_dir.clone() + "/rpc2/" + cacheprefix.as_str() + command.as_str()
+    }
+    pub fn cleanup(&mut self) {
+        for f in self.content_files.iter() {
+            println!("clean {}", f);
+            let _ = std::fs::remove_file(f);
+        }
+        #[cfg(feature = "sabi")]
+        for plugin in &self.plugins {
+            plugin.cleanup()();
+        }
+        for builtin in self.builtins.iter_mut() {
+            builtin.cleanup();
+        }
     }
     pub fn handle_command(
         &mut self,
@@ -37,8 +61,7 @@ impl RPC2Server {
         command: String,
         args: Vec<String>,
     ) -> Option<(String, Vec<u8>)> {
-        let content_path =
-            self.content_dir.clone() + "/rpc2/" + cacheprefix.as_str() + command.as_str();
+        let content_path = self.get_content_path(cacheprefix.clone(), command.clone());
         if self.listeners.contains_key(&command) {
             let cc = args.concat();
             self.listeners
@@ -48,12 +71,57 @@ impl RPC2Server {
                 .for_each(|x| x.send(cc.clone()).expect("should be able to send."));
             return None;
         }
-        if command == "__ACK" {
-            let found = self.needs_ack.iter().position(|x| *x == command);
-            if found.is_some() {
-                self.needs_ack.remove(found.unwrap());
-                std::fs::remove_file(content_path).expect("should be able to remove the file.");
-            }
+        // if command == "__ACK" {
+        //     let found = self.needs_ack.iter().position(|x| *x == command);
+        //     if let Some(foundn) = found {
+        //         self.needs_ack.remove(foundn);
+        //         std::fs::remove_file(content_path).expect("should be able to remove the file.");
+        //     }
+        //     return None;
+        /*} else*/
+        if command == "__CLEANUP" {
+            // for v in self.needs_ack.iter() {
+            //     let _ = std::fs::remove_file(v);
+            // }
+            self.cleanup();
+            return None;
+        // } else if command == "__GETFAILURE" {
+        //     let failed = self.failed_reads.clone();
+        //     self.failed_reads.clear();
+        //     return Some((
+        //         content_path,
+        //         json!(vec![
+        //             Value::Bool(true),
+        //             Value::Array(
+        //                 failed
+        //                     .iter()
+        //                     .map(|x| Value::Array(vec![
+        //                         Value::String(x.0.to_string()),
+        //                         Value::String(x.1.clone())
+        //                     ]))
+        //                     .collect()
+        //             )
+        //         ])
+        //         .to_string()
+        //         .as_bytes()
+        //         .to_vec(),
+        //     ));
+        } else if command == "__READY" {
+            return Some((
+                content_path,
+                json!(
+                    self.ready
+                        .clone()
+                        .iter()
+                        .map(|x| Value::String(x.clone()))
+                        .collect::<Vec<Value>>()
+                )
+                .to_string()
+                .as_bytes()
+                .to_vec(),
+            ));
+        } else if command == "__READYACK" {
+            self.ready.clear();
             return None;
         }
         println!(
@@ -66,22 +134,41 @@ impl RPC2Server {
         );
         let mut data: Vec<u8> = vec![]; // the difference is that this will always be a multiple of 4
         let mut handled: bool = false;
+        #[cfg(feature = "sabi")]
         for plugin in &self.plugins {
             if plugin.get_event_mask()()
                 .into_rust()
-                .is_none_or(|x| x.iter().find(|x| **x == command).is_some())
+                .is_none_or(|x| x.iter().any(|x| **x == command))
             {
                 let result = plugin.handle_message()(
                     command.clone().into_(),
                     args.iter().map(|x| x.clone().into_()).collect(),
                 );
-                if result.is_some() {
-                    let it = result.unwrap().into_rust();
-                    if it.len() > 0 {
+                if let Some(res) = result {
+                    // self.needs_ack.push(content_path.clone());
+                    let it = res.into_rust();
+                    if !it.is_empty() {
                         data.extend(it);
                     }
                     handled = true;
                     break;
+                }
+            }
+        }
+        if !handled {
+            for builtin in self.builtins.iter_mut() {
+                if builtin.get_filter().contains(&command.as_str()) {
+                    let result = builtin
+                        .as_mut()
+                        .handle_message(command.clone(), args.clone());
+                    if let Some(res) = result {
+                        // self.needs_ack.push(content_path.clone());
+                        if !res.is_empty() {
+                            data.extend(res);
+                        }
+                        handled = true;
+                        break;
+                    }
                 }
             }
         }
@@ -95,20 +182,43 @@ impl RPC2Server {
                 .as_bytes(),
             )
         }
-        if data.len() == 0 {
+        if data.is_empty() {
             data.extend(json!(vec![Value::Bool(true)]).to_string().as_bytes());
         };
-        return Some((content_path, data));
+        self.ready.push(cacheprefix + command.as_str());
+        Some((content_path, data))
     }
     fn check_lines(&mut self, p: String) -> Result<(), std::io::Error> {
-        // ex: 2024-12-10T02:03:25.759Z,1.759155,ad1d2440,6 [FLog::Output]
-        let cmd_output_regex: Regex = Regex::new(r"^(?:(?:[1-9]\d{3})-(?:0[1-9]|1[0-2])-(?:0[1-9]|[1-2]\d|3[0-1])T(?:[0-4]\d|5[0-9]):(?:[0-4]\d|5[0-9]):(?:[0-4]\d|5[0-9])(?:\.\d{3})?Z,(?:[0-9]*[.]?[0-9]*),[[:xdigit:]]+)(?:,[0-9])? \[FLog::Output\] RPC2:(.+)$").unwrap();
+        // ex: 2024-12-10T02:03:25.759Z,1.759155,ad1d2440,6 [FLog::Output] (or FLog::Warning)
+        let cmd_output_regex: Regex = Regex::new(r"^(?:(?:[1-9]\d{3})-(?:0[1-9]|1[0-2])-(?:0[1-9]|[1-2]\d|3[0-1])T(?:[0-4]\d|5[0-9]):(?:[0-4]\d|5[0-9]):(?:[0-4]\d|5[0-9])(?:\.\d{3})?Z,(?:[0-9]*[.]?[0-9]*),[[:xdigit:]]+)(?:,[0-9])? \[FLog::Warning\] RPC2:(.+)$").unwrap();
+        // let read_failure_regex: Regex = Regex::new(r"^(?:(?:[1-9]\d{3})-(?:0[1-9]|1[0-2])-(?:0[1-9]|[1-2]\d|3[0-1])T(?:[0-4]\d|5[0-9]):(?:[0-4]\d|5[0-9]):(?:[0-4]\d|5[0-9])(?:\.\d{3})?Z,(?:[0-9]*[.]?[0-9]*),[[:xdigit:]]+)(?:,[0-9])? \[FLog::Warning\] Warning: Font family rbxasset://rpc2/(?:.+) failed to load: .+$").unwrap();
         if !self.checked_lines.contains_key(&p) {
             let _ = self.checked_lines.insert(p.clone(), 0);
         }
         let str = std::fs::read_to_string(p.clone())?;
         let iterr = str.lines();
         let count = iterr.clone().count();
+        // for data in iterr
+        //     .clone()
+        //     .skip(*self.checked_lines.get(&p).unwrap())
+        //     .filter_map(|x| read_failure_regex.captures(x))
+        // {
+        //     if let Some(path) = data.get(1) {
+        //         self.failed_reads
+        //             .push((chrono::Local::now(), path.as_str().to_string()));
+        //         let content_path = self.get_content_path("".to_string(), path.as_str().to_string());
+        //         if self.needs_ack.contains(&content_path) {
+        //             self.needs_ack.remove(
+        //                 self.needs_ack
+        //                     .iter()
+        //                     .enumerate()
+        //                     .find(|x| *x.1 == content_path)
+        //                     .unwrap()
+        //                     .0,
+        //             );
+        //         }
+        //     }
+        // }
         for data in iterr
             .skip(self.checked_lines.insert(p, count).unwrap())
             .filter_map(|x| cmd_output_regex.captures(x))
@@ -121,16 +231,19 @@ impl RPC2Server {
             match serde_json::from_str(json.as_str()) {
                 Ok(a) => {
                     let b: Vec<&str> = a;
-                    if b.first().is_some() && b.get(1).is_some() {
-                        let cachestr = b.first().unwrap().to_string();
-                        let cmdstr = b.get(1).unwrap().to_string();
+                    if let (Some(cachestr), Some(cmdstr)) = (b.first(), b.get(1)) {
+                        // b.first().is_some() && b.get(1).is_some() {
+                        // let cachestr = b.first().unwrap().to_string();
+                        // let cmdstr = b.get(1).unwrap().to_string();
+                        let cachestr = cachestr.to_string();
+                        let cmdstr = cmdstr.to_string();
                         let cmd = self.handle_command(
                             cachestr,
                             cmdstr.clone(),
                             b.iter().skip(2).map(|x| x.to_string()).collect(),
                         );
-                        if cmd.is_some() {
-                            let dat = cmd.unwrap();
+                        if let Some(dat) = cmd {
+                            self.content_files.push(dat.0.clone());
                             write_data(dat.0, cmdstr.into(), dat.1).expect(
                                 "content/rpc2 directory to be present, and for writing to succeed",
                             );
@@ -146,7 +259,7 @@ impl RPC2Server {
     }
     pub async fn listen(mut self, log_dir: &Path) -> Result<(), Error> {
         let (tx, rx) = std::sync::mpsc::channel::<notify::Result<Event>>();
-        const POLL_INTERVAL: Duration = Duration::from_millis(200);
+        const POLL_INTERVAL: Duration = Duration::from_millis(100);
         // MAYBE, maybe this will work. so far windows hates watching files.
         let confige = Config::default().with_poll_interval(POLL_INTERVAL);
         let mut watcher = notify::recommended_watcher(tx).unwrap();
@@ -163,7 +276,7 @@ impl RPC2Server {
                     match res {
                         Ok(ev) => match ev.kind {
                             notify::EventKind::Create(CreateKind::File | CreateKind::Any) => {
-                                println!("listening to new file...");
+                                println!("listening to new file (windows)...");
                                 self.monitered_files
                                     .push(ev.paths.first().unwrap().to_str().unwrap().to_string());
                             }
@@ -171,13 +284,13 @@ impl RPC2Server {
                                 ModifyKind::Metadata(_) | ModifyKind::Data(_) | ModifyKind::Other,
                             ) => {
                                 let path = ev.paths.first().unwrap().to_str().unwrap().to_string();
-                                if self.monitered_files.iter().find(|x| **x == path).is_some() {
+                                if self.monitered_files.iter().any(|x| **x == path) {
                                     println!("check lines {:?}", self.check_lines(path));
                                 }
                             }
                             notify::EventKind::Remove(RemoveKind::Any | RemoveKind::File) => {
                                 let path = ev.paths.first().unwrap().to_str().unwrap().to_string();
-                                if self.monitered_files.iter().find(|x| **x == path).is_some() {
+                                if self.monitered_files.iter().any(|x| **x == path) {
                                     self.monitered_files.remove(
                                         self.monitered_files
                                             .iter()
@@ -198,12 +311,12 @@ impl RPC2Server {
                             if prev_lengths.contains_key(file) {
                                 if *prev_lengths.get(file).unwrap() != newlen {
                                     /*println!("check lines 2 {:?}", */
-                                    self.check_lines(file.clone()); /*);*/
+                                    let _ = self.check_lines(file.clone()); /*);*/
                                 }
                             } else {
                                 prev_lengths.insert(file.clone(), newlen);
                                 /*println!("check lines 3 {:?}", */
-                                self.check_lines(file.clone()); /*);*/
+                                let _ = self.check_lines(file.clone()); /*);*/
                             }
                         }
                     }
@@ -224,13 +337,13 @@ impl RPC2Server {
                         ModifyKind::Metadata(_) | ModifyKind::Data(_) | ModifyKind::Other,
                     ) => {
                         let path = ev.paths.first().unwrap().to_str().unwrap().to_string();
-                        if self.monitered_files.iter().find(|x| **x == path).is_some() {
+                        if self.monitered_files.iter().any(|x| **x == path) {
                             println!("check lines {:?}", self.check_lines(path));
                         }
                     }
                     notify::EventKind::Remove(RemoveKind::Any | RemoveKind::File) => {
                         let path = ev.paths.first().unwrap().to_str().unwrap().to_string();
-                        if self.monitered_files.iter().find(|x| **x == path).is_some() {
+                        if self.monitered_files.iter().any(|x| **x == path) {
                             self.monitered_files.remove(
                                 self.monitered_files
                                     .iter()
@@ -247,71 +360,17 @@ impl RPC2Server {
         #[allow(unreachable_code)]
         Ok(()) // never (!) is experimental
     }
-    pub fn get_stream(
-        &mut self,
-        scope: String,
-        timeout: Option<Duration>,
-    ) -> impl futures_core::Stream<Item = char> {
-        if !self.listeners.contains_key(&scope) {
-            self.listeners.insert(scope.clone(), Vec::new());
-        }
-        let (send, recv) = mpsc::channel();
-        self.listeners.get_mut(&scope).unwrap().push(send);
-        RPC2Stream {
-            chunk: Vec::new(),
-            pending: Vec::new(),
-            timeout: timeout.unwrap_or(Duration::from_secs(3)),
-            mpsc: recv,
-        }
-    }
 }
-impl futures_core::Stream for RPC2Stream {
-    type Item = char;
-    fn poll_next<'b>(
-        self: Pin<&mut Self>,
-        _ctx: &mut std::task::Context<'b>,
-    ) -> Poll<Option<char>> {
-        if self.chunk.is_empty() {
-            let mutt = self.get_mut();
-            if mutt.pending.is_empty() {
-                let ok = mutt.mpsc.recv_timeout(mutt.timeout).ok();
-                if ok.is_some() {
-                    mutt.chunk = ok
-                        .unwrap()
-                        .as_bytes()
-                        .iter()
-                        .filter_map(|x| char::from_u32((*x).into()))
-                        .collect();
-                    loop {
-                        let r = mutt.mpsc.recv();
-                        if r.is_ok() {
-                            mutt.pending.push(r.unwrap());
-                        } else {
-                            break;
-                        }
-                    }
-                }
-                return Poll::Ready(mutt.chunk.pop());
-            } else {
-                mutt.chunk = mutt
-                    .pending
-                    .pop()
-                    .unwrap()
-                    .as_bytes()
-                    .iter()
-                    .filter_map(|x| char::from_u32((*x).into()))
-                    .collect();
-            }
-            return Poll::Pending;
-        } else {
-            return Poll::Ready(Some(self.get_mut().chunk.pop().unwrap()));
-        }
-    }
-}
-pub fn new_server(content_dir: String, plugins: Option<Vec<RPC2PluginRef>>) -> RPC2Server {
+pub fn new_server(
+    content_dir: String,
+    #[cfg(feature = "sabi")] plugins: Option<Vec<RPC2PluginRef>>,
+    builtins: Option<Vec<Box<dyn RPC2BuiltinPlugin>>>,
+) -> RPC2Server {
     RPC2Server {
         content_dir,
-        plugins: plugins.unwrap_or(Vec::new()),
+        #[cfg(feature = "sabi")]
+        plugins: plugins.unwrap_or_default(),
+        builtins: builtins.unwrap_or_default(),
         ..Default::default()
     }
 }

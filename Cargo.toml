@@ -1,3 +1,9 @@
 [workspace]
-resolver = "1"
-members = [ "example_plugin", "interface","server",    "plugin_debug_server"]
+resolver = "2"
+members = [
+  "interface",
+  "server",
+  "plugin_debug_server",
+  "plugins/workspacefs",
+  "plugins/websocket",
+  "plugins/example"]

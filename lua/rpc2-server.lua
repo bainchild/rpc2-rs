@@ -11,7 +11,7 @@ local function writedata(path,input)
    out:write(table.concat(png.output,''))
    out:close()
 end
-local path = assert((...),"usage: lua rpc2.lua path/to/log/file")
+local log_path = assert((...),"usage: lua rpc2.lua path/to/log/file")
 local lastone,waiting_ack = 0,{}
 local funcs;funcs = {
    ["writefile"]=function(path,data)
@@ -30,7 +30,7 @@ local funcs;funcs = {
    end;
 }
 while true do
-   local logf = assert(io.open(path,"a+"))
+   local logf = assert(io.open(log_path,"a+"))
    local enj = logf:seek("end")
    if enj~=lastone then
       print("size changed, checking...",enj,lastone)
@@ -45,7 +45,7 @@ while true do
             print("> "..cmd)
             local suc,r = pcall(json.decode,cmd)
             if suc then
-               if r[1]=="__ACK" then 
+               if r[1]=="__ACK" then
                   local func = r[2]
                   if func==nil then return end
                   if funcs[func] and waiting_ack[func] then
@@ -53,6 +53,7 @@ while true do
                      writedata("rpc2/"..func,"\0")
                   end
                elseif funcs[r[1] ] then
+                  ---@diagnostic disable-next-line: deprecated
                   writedata("rpc2/"..r[1],json.encode({pcall(funcs[r[1] ],unpack(r,2))}))
                   waiting_ack[r[1] ] = true
                end

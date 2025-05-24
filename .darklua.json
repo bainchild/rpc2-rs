@@ -1,0 +1,29 @@
+{
+  "generator": {
+    "name": "dense",
+    "column_span": 125000000000
+  },
+  "bundle": {
+    "modules_identifier": "DL",
+    "require_mode": {
+      "name": "path",
+    },
+    "excludes": ["bit32"]
+  },
+  "rules": [
+    "remove_unused_while",
+    "remove_unused_if_branch",
+    "remove_nil_declaration",
+    "remove_method_definition",
+    "remove_function_call_parens",
+    "remove_empty_do",
+    "remove_compound_assignment",
+    "remove_comments",
+    "group_local_assignment",
+    "filter_after_early_return",
+    "convert_local_function_to_assign",
+    "rename_variables",
+    "convert_index_to_field",
+    "compute_expression"
+  ]
+}

@@ -1,7 +1,10 @@
 [package]
 name = "rpc2_interface"
-version = "0.1.0"
-edition = "2021"
+version = "0.2.0"
+edition = "2024"
 
 [dependencies]
-abi_stable = "0.11.3"
+abi_stable = { version = "0.11.3", optional = true }
+
+[features]
+sabi = ["dep:abi_stable"]
