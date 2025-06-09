@@ -1,0 +1,4 @@
+[core]
+    attributesfile = ~/.gitattributes
+[diff "hidden"]
+     command = /bin/true
